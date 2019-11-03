@@ -1,2 +1,3 @@
-# tcpproxy
-TCP Proxy
+# dippy
+
+Simple TCP Proxy
