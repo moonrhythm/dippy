@@ -5,31 +5,48 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
 
-var (
-	targetAddr = os.Getenv("TARGET_ADDR")
-	listenAddr = os.Getenv("LISTEN_ADDR")
-)
+var config = os.Getenv("PROXY_CONFIG")
 
 func main() {
 	log.Println("dippy")
 
-	if listenAddr == "" {
-		log.Fatal("LISTEN_ADDR required")
-	}
-	if targetAddr == "" {
-		log.Fatal("TARGET_ADDR required")
+	list := strings.Split(config, ",")
+
+	// extract src and dst
+	var proxies []*proxy
+	for _, it := range list {
+		xs := strings.Split(it, "=")
+		if len(xs) != 2 {
+			continue
+		}
+		proxies = append(proxies, &proxy{
+			Addr:   xs[0],
+			Target: xs[1],
+		})
 	}
 
-	log.Println("LISTEN_ADDR", listenAddr)
-	log.Println("TARGET_ADDR", targetAddr)
+	for _, p := range proxies {
+		log.Println(p.Addr + "=" + p.Target)
+		go p.Listen()
+	}
 
-	lis, err := net.Listen("tcp", listenAddr)
+	select {}
+}
+
+type proxy struct {
+	Addr   string
+	Target string
+}
+
+func (p *proxy) Listen() error {
+	lis, err := net.Listen("tcp", p.Addr)
 	if err != nil {
-		log.Fatal("can not listen on", listenAddr)
+		log.Fatal("can not listen on", p.Addr)
 	}
 	defer lis.Close()
 
@@ -40,32 +57,30 @@ func main() {
 			continue
 		}
 
-		go process(conn)
+		go p.process(conn)
 	}
 }
 
-var dialer = net.Dialer{
-	Timeout:   2 * time.Second,
-	KeepAlive: 10 * time.Minute,
-}
-
-func process(src net.Conn) {
-	log.Println("accepted")
-	defer log.Println("closed")
+func (p *proxy) process(src net.Conn) {
 	defer src.Close()
 
-	dst, err := dialer.Dial("tcp", targetAddr)
+	dst, err := dialer.Dial("tcp", p.Target)
 	if err != nil {
 		log.Println("can not dial target")
 		return
 	}
 	defer dst.Close()
 
-	p, b := pool.Get().([]byte), pool.Get().([]byte)
-	defer pool.Put(p)
-	defer pool.Put(b)
-	go io.Copy(dst, src)
-	io.Copy(src, dst)
+	s, d := pool.Get().([]byte), pool.Get().([]byte)
+	defer pool.Put(s)
+	defer pool.Put(d)
+	go io.CopyBuffer(dst, src, s)
+	io.CopyBuffer(src, dst, d)
+}
+
+var dialer = net.Dialer{
+	Timeout:   2 * time.Second,
+	KeepAlive: 10 * time.Minute,
 }
 
 const bufferSize = 16 * 1024
