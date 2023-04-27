@@ -8,6 +8,6 @@ RUN go build -o dippy .
 
 FROM gcr.io/distroless/static
 
-COPY --from=build /workspace/dippy .
+COPY --from=0 /workspace/dippy .
 
 ENTRYPOINT ["/dippy"]
