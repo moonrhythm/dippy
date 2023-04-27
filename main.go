@@ -10,11 +10,10 @@ import (
 	"time"
 )
 
-var config = os.Getenv("PROXY_CONFIG")
-
 func main() {
 	log.Println("dippy")
 
+	config := os.Getenv("PROXY_CONFIG")
 	list := strings.Split(config, ",")
 
 	// extract src and dst
@@ -31,7 +30,7 @@ func main() {
 	}
 
 	for _, p := range proxies {
-		log.Println(p.Addr + "=" + p.Target)
+		log.Printf("proxy %s -> %s\n", p.Addr, p.Target)
 		go p.Listen()
 	}
 
@@ -80,7 +79,7 @@ func (p *proxy) process(src net.Conn) {
 
 var dialer = net.Dialer{
 	Timeout:   2 * time.Second,
-	KeepAlive: 10 * time.Minute,
+	KeepAlive: 1 * time.Minute,
 }
 
 const bufferSize = 16 * 1024
