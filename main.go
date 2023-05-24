@@ -1,19 +1,25 @@
 package main
 
 import (
+	"flag"
 	"io"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
 func main() {
 	log.Println("dippy")
 
-	config := os.Getenv("PROXY_CONFIG")
+	var config string
+	flag.StringVar(&config, "config", os.Getenv("PROXY_CONFIG"), "proxy config")
+	flag.Parse()
+
 	list := strings.Split(config, ",")
 
 	// extract src and dst
@@ -29,29 +35,62 @@ func main() {
 		})
 	}
 
-	for _, p := range proxies {
-		log.Printf("proxy %s -> %s\n", p.Addr, p.Target)
-		go p.Listen()
+	if len(proxies) == 0 {
+		log.Fatal("no proxy config")
 	}
 
-	select {}
+	shutdown := make(chan os.Signal, 2)
+	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
+
+	for _, p := range proxies {
+		log.Printf("proxy %s -> %s\n", p.Addr, p.Target)
+		err := p.Listen()
+		if err != nil {
+			log.Fatal("can not listen on", p.Addr)
+		}
+	}
+
+	<-shutdown
+
+	log.Println("shutting down")
+	for _, p := range proxies {
+		p.Close()
+	}
 }
 
 type proxy struct {
+	listener net.Listener
+
 	Addr   string
 	Target string
 }
 
 func (p *proxy) Listen() error {
-	lis, err := net.Listen("tcp", p.Addr)
+	var err error
+	p.listener, err = net.Listen("tcp", p.Addr)
 	if err != nil {
-		log.Fatal("can not listen on", p.Addr)
+		return err
 	}
-	defer lis.Close()
 
+	go p.acceptLoop()
+	return nil
+}
+
+func (p *proxy) Close() {
+	if p.listener == nil {
+		return
+	}
+	p.listener.Close()
+}
+
+func (p *proxy) acceptLoop() {
 	for {
-		conn, err := lis.Accept()
+		conn, err := p.listener.Accept()
 		if err != nil {
+			if isClosed(err) {
+				return
+			}
+
 			log.Println("accept connection error;", err)
 			continue
 		}
@@ -65,16 +104,47 @@ func (p *proxy) process(src net.Conn) {
 
 	dst, err := dialer.Dial("tcp", p.Target)
 	if err != nil {
-		log.Println("can not dial target")
+		log.Printf("can not dial %s: %s\n", p.Target, err)
 		return
 	}
 	defer dst.Close()
 
-	s, d := pool.Get().([]byte), pool.Get().([]byte)
-	defer pool.Put(s)
-	defer pool.Put(d)
-	go io.CopyBuffer(dst, src, s)
-	io.CopyBuffer(src, dst, d)
+	pc := pipeConnection{
+		src: src,
+		dst: dst,
+	}
+	pc.do()
+}
+
+type pipeConnection struct {
+	src   net.Conn
+	dst   net.Conn
+	errCh chan error
+}
+
+func (p *pipeConnection) do() error {
+	p.errCh = make(chan error, 2)
+
+	go p.copyToSrc()
+	go p.copyToDst()
+
+	return <-p.errCh
+}
+
+func (p *pipeConnection) copyToDst() {
+	b := pool.Get().(*[]byte)
+	defer pool.Put(b)
+
+	_, err := io.CopyBuffer(p.dst, p.src, *b)
+	p.errCh <- err
+}
+
+func (p *pipeConnection) copyToSrc() {
+	b := pool.Get().(*[]byte)
+	defer pool.Put(b)
+
+	_, err := io.CopyBuffer(p.src, p.dst, *b)
+	p.errCh <- err
 }
 
 var dialer = net.Dialer{
@@ -85,7 +155,15 @@ var dialer = net.Dialer{
 const bufferSize = 16 * 1024
 
 var pool = sync.Pool{
-	New: func() interface{} {
-		return make([]byte, bufferSize)
+	New: func() any {
+		b := make([]byte, bufferSize)
+		return &b
 	},
+}
+
+func isClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "use of closed network connection")
 }
