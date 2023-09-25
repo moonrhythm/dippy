@@ -96,6 +96,7 @@ func (p *proxy) acceptLoop() {
 			continue
 		}
 
+		slog.Info("accept connection", "local", conn.LocalAddr(), "remote", conn.RemoteAddr())
 		go p.process(conn)
 	}
 }
