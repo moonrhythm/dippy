@@ -3,18 +3,17 @@ package main
 import (
 	"flag"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
 
 func main() {
-	log.Println("dippy")
+	slog.Info("dippy")
 
 	var config string
 	flag.StringVar(&config, "config", os.Getenv("PROXY_CONFIG"), "proxy config")
@@ -36,23 +35,25 @@ func main() {
 	}
 
 	if len(proxies) == 0 {
-		log.Fatal("no proxy config")
+		slog.Error("no proxy config")
+		os.Exit(1)
 	}
 
 	shutdown := make(chan os.Signal, 2)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
 
 	for _, p := range proxies {
-		log.Printf("proxy %s -> %s\n", p.Addr, p.Target)
+		slog.Info("start proxy", "from", p.Addr, "to", p.Target)
 		err := p.Listen()
 		if err != nil {
-			log.Fatal("can not listen on", p.Addr)
+			slog.Error("can not listen", "addr", p.Addr)
+			os.Exit(1)
 		}
 	}
 
 	<-shutdown
 
-	log.Println("shutting down")
+	slog.Info("shutting down")
 	for _, p := range proxies {
 		p.Close()
 	}
@@ -91,7 +92,7 @@ func (p *proxy) acceptLoop() {
 				return
 			}
 
-			log.Println("accept connection error;", err)
+			slog.Warn("accept connection error", "error", err)
 			continue
 		}
 
@@ -104,7 +105,7 @@ func (p *proxy) process(src net.Conn) {
 
 	dst, err := dialer.Dial("tcp", p.Target)
 	if err != nil {
-		log.Printf("can not dial %s: %s\n", p.Target, err)
+		slog.Error("can not dial", "addr", p.Target, "error", err)
 		return
 	}
 	defer dst.Close()
@@ -132,33 +133,18 @@ func (p *pipeConnection) do() error {
 }
 
 func (p *pipeConnection) copyToDst() {
-	b := pool.Get().(*[]byte)
-	defer pool.Put(b)
-
-	_, err := io.CopyBuffer(p.dst, p.src, *b)
+	_, err := io.Copy(p.dst, p.src)
 	p.errCh <- err
 }
 
 func (p *pipeConnection) copyToSrc() {
-	b := pool.Get().(*[]byte)
-	defer pool.Put(b)
-
-	_, err := io.CopyBuffer(p.src, p.dst, *b)
+	_, err := io.Copy(p.src, p.dst)
 	p.errCh <- err
 }
 
 var dialer = net.Dialer{
 	Timeout:   2 * time.Second,
 	KeepAlive: 1 * time.Minute,
-}
-
-const bufferSize = 16 * 1024
-
-var pool = sync.Pool{
-	New: func() any {
-		b := make([]byte, bufferSize)
-		return &b
-	},
 }
 
 func isClosed(err error) bool {

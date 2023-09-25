@@ -1,6 +1,5 @@
-FROM golang:1.20.4
+FROM golang:1.21.1
 
-ENV GOOS=linux
 ENV CGO_ENABLED=0
 WORKDIR /workspace
 ADD . .
