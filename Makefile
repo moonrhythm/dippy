@@ -3,4 +3,4 @@ build:
 		--frontend dockerfile.v0 \
 		--local dockerfile=. \
 		--local context=. \
-		--output type=image,name=gcr.io/moonrhythm-containers/dippy,push=true
+		--output type=image,name=registry.moonrhythm.io/dippy,push=true
